@@ -365,7 +365,7 @@ class Query
         return $this;
     }
 
-    public function setRefresh($refresh = false)
+    public function refresh($refresh = false)
     {
         if ($refresh !== false && $refresh !== true && $refresh !== 'wait_for') {
             throw new InvalidArgumentException('Refresh parameters must be `true`, `false` or `wait_for`');
