@@ -5,6 +5,7 @@ namespace Basemkhirat\Elasticsearch;
 use Basemkhirat\Elasticsearch\Classes\Bulk;
 use Basemkhirat\Elasticsearch\Classes\Search;
 use Basemkhirat\Elasticsearch\Collection;
+use Elasticsearch\Common\Exceptions\InvalidArgumentException;
 
 /**
  * Class Query
@@ -39,12 +40,6 @@ class Query
         "like",
         "exists",
     ];
-
-    /**
-     * Index Refresh
-     * @var bool|string
-     */
-    protected $refresh = false;
 
     /**
      * Query array
@@ -165,6 +160,18 @@ class Query
      * @var \Basemkhirat\Elasticsearch\Model
      */
     public $model;
+
+    /**
+     * Use model global scopes
+     * @var bool
+     */
+    public $useGlobalScopes = true;
+
+    /**
+     * Use refresh on URL
+     * @var bool|string
+     */
+    protected $refresh = false;
 
     /**
      * Query constructor.
@@ -354,6 +361,16 @@ class Query
     {
 
         $this->sort[] = [$field => $direction];
+
+        return $this;
+    }
+
+    public function setRefresh($refresh = false)
+    {
+        if ($refresh !== false && $refresh !== true && $refresh !== 'wait_for') {
+            throw new InvalidArgumentException('Refresh parameters must be `true`, `false` or `wait_for`');
+        }
+        $this->refresh = $refresh;
 
         return $this;
     }
@@ -753,6 +770,10 @@ class Query
             $query["type"] = $this->getType();
         }
 
+        if ($this->model && $this->useGlobalScopes) {
+            $this->model->boot($this);
+        }
+
         $query["body"] = $this->getBody();
 
         $query["from"] = $this->getSkip();
@@ -857,14 +878,14 @@ class Query
         $scroll_id = !is_null($scroll_id) ? $scroll_id : $this->scroll_id;
 
         if ($scroll_id) {
-
             $result = $this->connection->scroll([
                 "scroll" => $this->scroll,
                 "scroll_id" => $scroll_id,
             ]);
 
         } else {
-            $result = $this->connection->search($this->query());
+            $query = $this->query();
+            $result = $this->connection->search($query);
         }
 
         if (!is_null($this->cacheMinutes)) {
@@ -916,36 +937,44 @@ class Query
     protected function getAll($result = [])
     {
 
-        $new = [];
+        if (array_key_exists("hits", $result)) {
 
-        foreach ($result["hits"]["hits"] as $row) {
+            $new = [];
 
-            $model = $this->model ? new $this->model($row["_source"], true) : new Model($row["_source"], true);
+            foreach ($result["hits"]["hits"] as $row) {
 
-            $model->setConnection($model->getConnection());
-            $model->setIndex($row["_index"]);
-            $model->setType($row["_type"]);
+                $model = $this->model ? new $this->model($row["_source"], true) : new Model($row["_source"], true);
 
-            // match earlier version
+                $model->setConnection($model->getConnection());
+                $model->setIndex($row["_index"]);
+                $model->setType($row["_type"]);
 
-            $model->_index = $row["_index"];
-            $model->_type = $row["_type"];
-            $model->_id = $row["_id"];
-            $model->_score = $row["_score"];
+                // match earlier version
 
-            $new[] = $model;
+                $model->_index = $row["_index"];
+                $model->_type = $row["_type"];
+                $model->_id = $row["_id"];
+                $model->_score = $row["_score"];
+
+                $new[] = $model;
+            }
+
+            $new = new Collection($new);
+
+            $new->total = $result["hits"]["total"];
+            $new->max_score = $result["hits"]["max_score"];
+            $new->took = $result["took"];
+            $new->timed_out = $result["timed_out"];
+            $new->scroll_id = isset($result["_scroll_id"]) ? $result["_scroll_id"] : null;
+            $new->shards = (object)$result["_shards"];
+
+            return $new;
+
+        } else {
+
+            return new Collection([]);
+
         }
-
-        $new = new Collection($new);
-
-        $new->total = $result["hits"]["total"];
-        $new->max_score = $result["hits"]["max_score"];
-        $new->took = $result["took"];
-        $new->timed_out = $result["timed_out"];
-        $new->scroll_id = isset($result["_scroll_id"]) ? $result["_scroll_id"] : null;
-        $new->shards = (object)$result["_shards"];
-
-        return $new;
     }
 
     /**
@@ -956,9 +985,9 @@ class Query
     protected function getFirst($result = [])
     {
 
-        $data = $result["hits"]["hits"];
+        if (array_key_exists("hits", $result) && count($result["hits"]["hits"])) {
 
-        if (count($data)) {
+            $data = $result["hits"]["hits"];
 
             if ($this->model) {
                 $model = new $this->model($data[0]["_source"], true);
@@ -1036,16 +1065,9 @@ class Query
             $parameters["id"] = $this->_id;
         }
 
-        $parameters["refresh"] = $this->refresh;
+        $parameters['custom']['refresh'] = $this->refresh;
 
         return (object)$this->connection->index($parameters);
-    }
-
-    public function refresh($status = false)
-    {
-        $this->refresh = $status;
-
-        return $this;
     }
 
     /**
@@ -1115,6 +1137,8 @@ class Query
         if ($type = $this->getType()) {
             $parameters["type"] = $type;
         }
+
+        $parameters['custom']['refresh'] = $this->refresh;
 
         return (object)$this->connection->update($parameters);
     }
@@ -1202,6 +1226,8 @@ class Query
         if ($type = $this->getType()) {
             $parameters["type"] = $type;
         }
+
+        $parameters['custom']['refresh'] = $this->refresh;
 
         return (object)$this->connection->delete($parameters);
     }
@@ -1389,5 +1415,16 @@ class Query
             }
         }
 
+    }
+
+    /**
+     * @return $this
+     */
+    public function withoutGlobalScopes()
+    {
+
+        $this->useGlobalScopes = false;
+
+        return $this;
     }
 }
