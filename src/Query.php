@@ -1108,6 +1108,8 @@ class Query
 
         }
 
+        $params['custom']['refresh'] = $this->refresh;
+
         return (object)$this->connection->bulk($params);
     }
 
